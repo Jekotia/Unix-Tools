@@ -1,0 +1,322 @@
+#! /bin/bash
+
+configDir=$HOME/.config/connect
+configFile=connect.conf
+hostsDir=$configDir/hosts
+
+## END CONFIGURABLE VARS ##
+
+
+
+targetHost=$2
+selProto=$1
+arg=$3
+argFile=$4
+conn_tools="add rm"
+
+function writeConfig() {
+	if [ ! -e $configDir/$configFile ] ; then
+		if [ ! -e $configDir ] ; then
+			mkdir -p $configDir
+		fi
+		touch $configDir/$configFile
+		echo "# Config file for \`connect\` shell script" >> $configFile
+		echo "# default key file" >> $configFile
+		echo "keyFile=\"~/.ssh/id_jameli\"" >> $configFile
+		echo "# protocols to include" >> $configFile
+		echo "conn_protocols=\"ssh sftp copy-id\"" >> $configFile
+		echo "#" >> $configFile
+		echo "conf_install=\"true\"" >> $configFile
+	fi
+	if [ ! -e $hostsDir ] ; then
+		mkdir $hostsDir
+	fi
+}
+
+writeConfig
+
+source $configDir/$configFile
+
+if [[ "$conf_install" == "true" ]] ; then conn_tools="$conn_tools install" ; installFile="$HOME/.zsh/shell-remote.sh" ; fi
+
+declare -A conn
+
+function connect_importHosts () {
+	k=1
+
+	local initDir=`pwd`
+	cd $hostsDir
+	for i in * ; do
+		if test -f "$i" ; then
+			if [[ "$k" -lt "10" ]] ; then k=1$k ; fi
+			#echo $k
+			#echo $i
+			source $i
+			conn[$k,name]=$i
+			conn[$k,user]=$user
+			conn[$k,host]=$host
+			conn[$k,port]=$port
+			if [[ "$key" == "" ]] ; then
+		   		conn[$k,key]=$keyFile
+			else
+				conn[$k,key]=$key
+			fi
+			#if [[ "$term" == "" ]] ; then
+				conn[$k,term]=$term
+			#fi
+			conn[$k,cmd]=$cmd
+
+			user=""
+			host=""
+			key=""
+			term=""
+			cmd=""
+		fi
+		((k++))
+	done
+	cd $initDir
+	#echo ${conn[@]}
+}
+
+function connect_readHosts () {
+	for i in "${!conn[@]}"
+	do
+		iKey="$i"
+		iVal="${conn[$i]}"
+		if [[ "$i" == *",name" ]] ; then
+			conn_hosts+="$iVal "
+			if [[ "$iVal" == "$targetHost" ]] ; then
+				selConn=${iKey:0:2}
+				if [[ "$conn_tools" != *"$selProto"* ]] ; then
+					if [[ "$conn_protocols" != *"$selProto"* ]] ; then
+						echo Error: Unsupported protocol specified.
+						connect_usage
+						exit 2
+					else
+						return 0
+					fi
+				fi
+			fi
+		fi
+	done
+	return 1
+}
+
+function connect_connectHost () {
+	# Let's build a command!
+	# FOR SSH
+	if [[ "$selProto" == "ssh" ]] ; then
+		# DEFINE THE TERM, IF CONFIGURED
+		if [[ ${conn[$selConn,term]} != "" ]] ; then
+			conCmd=TERM="${conn[$selConn,term]} "
+		fi
+		# IF CMD IS SET, ADD -t ARG
+		if [[ ${conn[$selConn,cmd]} == "" ]] ; then # || "$arg" == "run" ]] ; then
+			conCmd="${conCmd}ssh -i"
+		else
+			conCmd="${conCmd}ssh -ti"
+		fi
+	# FOR SFTP
+	elif [[ "$selProto" == "sftp" ]] ; then
+		conCmd="sftp -i"
+	elif [[ "$selProto" == "copy-id" ]] ; then
+		conCmd="ssh-copy-id -i"
+	fi
+
+	conCmd="$conCmd ${conn[$selConn,key]}"
+	if [[ "${conn[$selConn,port]}" != "" ]] ; then
+		#echo PORT ${conn[$selConn,port]}
+		if [[ "$selProto" == "ssh" ]] ; then
+			conCmd="${conCmd} -p ${conn[$selConn,port]}"
+		elif [[ "$selProto" == "sftp" ]] ; then
+			conCmd="${conCmd} -P ${conn[$selConn,port]}"
+		elif [[ "$selProto" == "copy-id" ]] ; then
+			conCmd="${conCmd} -P ${conn[$selConn,port]}"
+		fi
+	fi
+	conCmd="${conCmd} ${conn[$selConn,user]}@${conn[$selConn,host]}"
+
+	if [[ "${conn[$selConn,cmd]}" != "" && "$selProto" == "ssh" ]] ; then  # && "$arg" != "run" ]] ; then 
+		conCmd="${conCmd} ${conn[$selConn,cmd]}"
+		conEcho=", and executing ${conn[$selConn,cmd]} when connected"
+	fi
+
+
+	#$conCmd=`echo ${conCmd}`
+	#$conCmd
+
+	echo "Connecting to host ${conn[$selConn,host]} as user ${conn[$selConn,user]} with key file ${conn[$selConn,key]}$conEcho"
+	#echo "$conCmd"
+
+repeat=true
+while "$repeat" ; do
+	eval $conCmd && repeat=false
+	if $repeat ; then
+		echo "Dirty disconnect from remote host `date`. Attempting reconnect..."
+		sleep 5
+	fi
+done
+
+
+#	eval $conCmd
+	exit
+}
+
+function connect_usage () {
+	echo "usage: $0 { $conn_protocols rm } { $conn_hosts}"
+	echo "usage: $0 tools { add }"
+}
+
+function connect_add () {
+	validHost=false
+	while [ "$validHost" == false ] ; do
+		printf "Enter the name of the host, as you would like to type it when invoking this script, or leave blank to exit: "
+		read -r hostFile
+		if [ "$hostFile" == "" ] ; then
+			exit
+		elif [ ! -e $hostsDir/$hostFile ] ; then
+			validHost=true
+			hostFile="$hostsDir/$hostFile"
+		else
+			printf "$hostFile already exists. If you believe this is an error, exit this script and delete the file with \'rm $hostFile\'\n"
+		fi
+	done
+
+	validUser=false
+	while [ "$validUser" == false ] ; do
+		printf "Enter the username to use when connecting to the remote host: "
+		read -r hostUser
+		if [ "$hostUser" == "" ] ; then
+			printf "username cannot be blank\n"
+		else
+			validUser=true
+			hostUser="user=\"$hostUser\""
+		fi
+	done
+
+	validName=false
+	while [ "$validName" == false ] ; do
+		printf "Enter the hostname to connect to: "
+		read -r hostName
+		if [ "$hostName" == "" ] ; then
+			printf "hostname cannot be blank\n"
+		else
+			validName=true
+			hostName="host=\"$hostName\""
+		fi
+	done
+
+	printf "Enter the port to connect to, or leave blank for the default: "
+	read -r hostPort
+	if [ "$hostPort" == "" ] ; then
+		hostPort="port=\"\""
+	else
+		hostPort="port=\"$hostPort\""
+	fi
+
+	validKey=false
+	while [ "$validKey" == false ] ; do
+		printf "Enter the non-relative path for the public key to use with this connection, or leave blank to use the default key: "
+		read -r hostKey
+		if [ "$hostKey" == "" ] ; then
+			validKey=true
+			hostKey="key=\"\""
+		elif [ ! -e $hostKey ] ; then
+			printf "The specified file does not exist\n"
+		else
+			validKey=true
+			hostKey="key=\"$hostKey\""
+		fi
+	done
+
+	printf "Enter the TERM to use when connecting, or leave blank to use your default: "
+	read -r hostTerm
+	if [ "$hostTerm" == "" ] ; then
+		hostTerm="term=\"\""
+	else
+		hostTerm="term=\"$hostTerm\""
+	fi
+
+	printf "Enter the command to execute on the remote host when connecting, or leave blank: "
+	read -r hostCmd
+	if [ "$hostCmd" == "" ] ; then
+		hostCmd="cmd=\"\""
+	else
+		hostCmd="cmd=\"$hostCmd\""
+	fi
+
+	touch $hostFile
+
+	cat <<EOM >$hostFile
+$hostUser
+$hostName
+$hostPort
+$hostKey
+$hostTerm
+$hostCmd
+EOM
+	exit 0
+}
+
+
+function connect_rm () {
+	if [ ! -e $hostsDir/$1 ] ; then
+		printf "File $hostsDir/$1 does not exist"
+		exit 1
+	elif [ -e $hostsDir/$1 ] ; then
+		printf "Are you sure you wish to remove $hostsDir/$1? This cannot be undone. Input [y]es to continue, and anything else to cancel... "
+		read -r rmConfirm
+		if [[ "$rmConfirm" == "y" || "$rmConfirm" == "yes" ]] ; then
+			rm -vf $hostsDir/$1
+		else
+			printf "Action cancelled"
+		fi
+	fi
+	exit 0
+}
+
+function connect_install () {
+	eval ssh -i ${conn[$selConn,key]} ${conn[$selConn,user]}@${conn[$selConn,host]} 'bash -s' < $installFile
+	exit
+}
+
+connect_importHosts
+
+if connect_readHosts ; then connect_connectHost ; fi
+
+case "$1" in
+	"tools")
+		case "$2" in
+			"add")
+				connect_add
+			;;
+			"rm")
+				connect_rm $3
+			;;
+			"install")
+				connect_install
+			;;
+		esac
+	;;
+	"args")
+		case "$2" in
+			"01")
+				echo "$conn_protocols tools"
+			;;
+			"21")
+				echo "$conn_hosts"
+			;;
+			"22")
+				echo "$conn_tools"
+			;;
+		esac
+	;;
+	"-h"|"--help")
+		connect_usage
+	;;
+	*)
+		connect_usage
+		exit 1
+	;;
+esac
+exit 0
