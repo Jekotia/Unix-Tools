@@ -167,97 +167,154 @@ function connect_usage () {
 	echo "usage: $0 tools { add }"
 }
 
-function connect_add () {
-	validHost=false
-	while [ "$validHost" == false ] ; do
-		printf "Enter the name of the host, as you would like to type it when invoking this script, or leave blank to exit: "
-		read -r hostFile
-		if [ "$hostFile" == "" ] ; then
-			exit
-		elif [ ! -e $hostsDir/$hostFile ] ; then
-			validHost=true
-			hostFile="$hostsDir/$hostFile"
-		else
-			printf "$hostFile already exists. If you believe this is an error, exit this script and delete the file with \'rm $hostFile\'\n"
-		fi
-	done
+function connect_add_ui () {
+	tmp="/tmp/out.tmp"
+	dialog --backtitle "$errors" --title "Add remote host" \
+	--form "\n$errors" 25 60 16 \
+	"Name:" 1 1 "$hostFile" 1 10 25 30 \
+	"Username:" 2 1 "$hostUser" 2 10 25 30 \
+	"Hostname:" 3 1 "$hostName" 3 10 25 30 \
+	"Port:" 4 1 "$hostPort" 4 10 25 30 \
+	"Keyfile:" 5 1 "$hostKey" 5 10 25 30 \
+	"Term:" 6 1 "$hostTerm" 6 10 25 30 \
+	"Command:" 7 1 "$hostCmd" 7 10 25 30 > $tmp 2>&1 >/dev/tty
 
-	validUser=false
-	while [ "$validUser" == false ] ; do
-		printf "Enter the username to use when connecting to the remote host: "
-		read -r hostUser
-		if [ "$hostUser" == "" ] ; then
-			printf "username cannot be blank\n"
-		else
-			validUser=true
-			hostUser="user=\"$hostUser\""
-		fi
-	done
+	EXIT=$?
 
-	validName=false
-	while [ "$validName" == false ] ; do
-		printf "Enter the hostname to connect to: "
-		read -r hostName
-		if [ "$hostName" == "" ] ; then
-			printf "hostname cannot be blank\n"
-		else
-			validName=true
-			hostName="host=\"$hostName\""
-		fi
-	done
+	errors=""
 
-	printf "Enter the port to connect to, or leave blank for the default: "
-	read -r hostPort
-	if [ "$hostPort" == "" ] ; then
-		hostPort="port=\"\""
-	else
-		hostPort="port=\"$hostPort\""
-	fi
+	hostFile="`sed -n 1p $tmp`"
+	hostUser="`sed -n 2p $tmp`"
+	hostName="`sed -n 3p $tmp`"
+	hostPort="`sed -n 4p $tmp`"
+	 hostKey="`sed -n 5p $tmp`"
+	hostTerm="`sed -n 6p $tmp`"
+	 hostCmd="`sed -n 7p $tmp`"
 
-	validKey=false
-	while [ "$validKey" == false ] ; do
-		printf "Enter the non-relative path for the public key to use with this connection, or leave blank to use the default key: "
-		read -r hostKey
-		if [ "$hostKey" == "" ] ; then
-			validKey=true
-			hostKey="key=\"\""
-		elif [ ! -e $hostKey ] ; then
-			printf "The specified file does not exist\n"
-		else
-			validKey=true
-			hostKey="key=\"$hostKey\""
-		fi
-	done
+	rm -rf $tmp
 
-	printf "Enter the TERM to use when connecting, or leave blank to use your default: "
-	read -r hostTerm
-	if [ "$hostTerm" == "" ] ; then
-		hostTerm="term=\"\""
-	else
-		hostTerm="term=\"$hostTerm\""
-	fi
-
-	printf "Enter the command to execute on the remote host when connecting, or leave blank: "
-	read -r hostCmd
-	if [ "$hostCmd" == "" ] ; then
-		hostCmd="cmd=\"\""
-	else
-		hostCmd="cmd=\"$hostCmd\""
-	fi
-
-	touch $hostFile
-
-	cat <<EOM >$hostFile
-$hostUser
-$hostName
-$hostPort
-$hostKey
-$hostTerm
-$hostCmd
-EOM
-	exit 0
+	if ! test $EXIT -eq 0 ; then exit $EXIT ; fi 
 }
 
+function connect_add () {
+	first_run=true
+	while ! connect_add_validate ; do
+		connect_add_ui
+	done
+	
+	if $validate ; then
+		connect_add_writeFile
+	fi
+}	
+
+function connect_add_validate () {
+	if $first_run ; then first_run=false ; return 1 ; fi
+	
+	connect_add_validate_host
+
+	connect_add_validate_user
+
+	connect_add_validate_name
+
+	connect_add_validate_port
+
+	connect_add_validate_key
+
+	connect_add_validate_term
+
+	connect_add_validate_cmd
+
+	if ! $validHost || ! $validUser || ! $validName || ! $validPort || ! $validKey || ! $validTerm || ! $validCmd ; then
+		return 1
+	fi
+	
+	validate=true
+}
+
+function connect_add_validate_host () {	
+	if [[ "$hostFile" == "" ]] ; then
+		validHost=false
+		errors="${errors}Name cannot be blank\n"
+	elif [ ! -e $hostsDir/$hostFile ] ; then
+		validHost=true
+	else
+		validHost=false
+		errors="${errors}$hostFile already exists. If you believe this is an error, exit this script and delete the file with \'rm $hostFile\'\n"
+	fi
+}
+
+function connect_add_validate_user () {
+	if [ "$hostUser" == "" ] ; then
+		validUser=false
+		errors="${errors}Username cannot be blank\n"
+	else
+		validUser=true
+	fi
+}
+
+function connect_add_validate_name () {
+	if [ "$hostName" == "" ] ; then
+		validName=false
+		errors="${errors}Hostname cannot be blank\n"
+	else
+		validName=true
+	fi
+}
+
+function connect_add_validate_port () {
+	if [[ "$hostPort" == "" ]] ; then
+		validPort=true
+	elif [[ ! "$hostPort" =~ ^[0-9]+$ ]] ; then
+		validPort=false
+		errors="${errors}Port must be a number\n"
+	else
+		validPort=true
+	fi
+}
+
+function connect_add_validate_key () {
+	if [ "$hostKey" == "" ] ; then
+		validKey=true
+	elif [ ! -e $hostKey ] ; then
+		validKey=false
+		printf "The specified file does not exist\n"
+	elif [ -e $hostKey ] ; then
+		validKey=true
+	else
+		echo "(╯°□°）╯︵ ┻━┻"
+		exit 666
+	fi
+}
+
+function connect_add_validate_term () {
+	if [ "$hostTerm" == "" ] ; then
+		validTerm=true
+	else
+		validTerm=true
+	fi
+}
+
+function connect_add_validate_cmd () {
+	if [ "$hostCmd" == "" ] ; then
+		validCmd=true
+	else
+		validCmd=true
+	fi
+}
+
+function connect_add_writeFile () {
+	touch ${hostsDir}/${hostFile}
+
+	cat <<EOM >${hostsDir}/${hostFile}
+user=$hostUser
+host=$hostName
+port=$hostPort
+key=$hostKey
+term=$hostTerm
+cmd=$hostCmd
+EOM
+
+}
 
 function connect_rm () {
 	if [ ! -e $hostsDir/$1 ] ; then
