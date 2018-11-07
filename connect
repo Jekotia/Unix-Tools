@@ -6,13 +6,29 @@ hostsDir=$configDir/hosts
 
 ## END CONFIGURABLE VARS ##
 
+function _debug() {
+	if [ $debug ] ; then
+		echo "DEBUG: $1"
+	fi
+}
 
+case $1 in
+	-d|--debug)
+		debug=True
+		_debug "Debug enabled."
+		shift
+	;;
+esac
 
 targetHost=$2
 selProto=$1
 arg=$3
 argFile=$4
 conn_tools="add rm"
+
+DIR=`pwd`
+
+
 
 function writeConfig() {
 	if [ ! -e $configDir/$configFile ] ; then
@@ -44,7 +60,7 @@ declare -A conn
 function connect_importHosts () {
 	k=1
 
-	local initDir=`pwd`
+#	local initDir=`pwd`
 	cd $hostsDir
 	for i in * ; do
 		if test -f "$i" ; then
@@ -57,7 +73,7 @@ function connect_importHosts () {
 			conn[$k,host]=$host
 			conn[$k,port]=$port
 			if [[ "$key" == "" ]] ; then
-		   		conn[$k,key]=$keyFile
+				conn[$k,key]=$keyFile
 			else
 				conn[$k,key]=$key
 			fi
@@ -65,17 +81,20 @@ function connect_importHosts () {
 				conn[$k,term]=$term
 			#fi
 			conn[$k,cmd]=$cmd
+			conn[$k,args]=$args
 
 			user=""
 			host=""
+			port=""
 			key=""
 			term=""
 			cmd=""
+			args=""
 		fi
 		((k++))
 	done
-	cd $initDir
-	#echo ${conn[@]}
+#	cd $initDir
+	#_debug "${conn[@]}"
 }
 
 function connect_readHosts () {
@@ -103,29 +122,62 @@ function connect_readHosts () {
 }
 
 function connect_connectHost () {
+	_debug "Constructing connection command"
+	_debug "user=${conn[$selConn,user]}"
+	_debug "host=${conn[$selConn,host]}"
+	_debug "port=${conn[$selConn,port]}"
+	_debug "key=${conn[$selConn,key]}"
+	_debug "term=${conn[$selConn,term]}"
+	_debug "cmd=${conn[$selConn,cmd]}"
+	_debug "args=${conn[$selConn,args]}"
+	
 	# Let's build a command!
 	# FOR SSH
 	if [[ "$selProto" == "ssh" ]] ; then
-		# DEFINE THE TERM, IF CONFIGURED
+		# Determine SSH program
+		if autossh -V > /dev/null 2>&1 ; then
+			autossh=1
+			conCmd="autossh -M 0"
+		elif ssh -V > /dev/null 2>&1 ; then
+			autossh=0
+			conCmd="ssh"
+		fi
+		
+		#-# DEFINE THE TERM, IF CONFIGURED
 		if [[ ${conn[$selConn,term]} != "" ]] ; then
 			conCmd=TERM="${conn[$selConn,term]} "
 		fi
-		# IF CMD IS SET, ADD -t ARG
-		if [[ ${conn[$selConn,cmd]} == "" ]] ; then # || "$arg" == "run" ]] ; then
-			conCmd="${conCmd}ssh -i"
-		else
-			conCmd="${conCmd}ssh -ti"
+		
+		#-# IF CMD IS SET, ADD -t ARG
+		if [[ ${conn[$selConn,cmd]} != "" ]] ; then # || "$arg" == "run" ]] ; then
+			conCmd="${conCmd} -t"
 		fi
+
+		#-# Add the key file
+		conCmd="${conCmd} -i ${conn[$selConn,key]}"
+
+		#if [[ ${conn[$selConn,key]} == "" ]] ; then # || "$arg" == "run" ]] ; then
+
+		#-# Support optional additional arguments
+		if [[ "${conn[$selConn,args]}" != "" ]] ; then
+			conCmd="${conCmd} ${conn[$selConn,args]}"
+		fi
+
 	# FOR SFTP
 	elif [[ "$selProto" == "sftp" ]] ; then
 		conCmd="sftp -i"
+
+		#-# Support optional additional arguments
+		if [[ "${conn[$selConn,args]}" != "" ]] ; then
+			conCmd="${conCmd} ${conn[$selConn,args]}"
+		fi
+
 	elif [[ "$selProto" == "copy-id" ]] ; then
 		conCmd="ssh-copy-id -i"
 	fi
 
-	conCmd="$conCmd ${conn[$selConn,key]}"
+	
 	if [[ "${conn[$selConn,port]}" != "" ]] ; then
-		#echo PORT ${conn[$selConn,port]}
 		if [[ "$selProto" == "ssh" ]] ; then
 			conCmd="${conCmd} -p ${conn[$selConn,port]}"
 		elif [[ "$selProto" == "sftp" ]] ; then
@@ -136,7 +188,7 @@ function connect_connectHost () {
 	fi
 	conCmd="${conCmd} ${conn[$selConn,user]}@${conn[$selConn,host]}"
 
-	if [[ "${conn[$selConn,cmd]}" != "" && "$selProto" == "ssh" ]] ; then  # && "$arg" != "run" ]] ; then 
+	if [[ "${conn[$selConn,cmd]}" != "" && "$selProto" == "ssh" ]] ; then # && "$arg" != "run" ]] ; then
 		conCmd="${conCmd} ${conn[$selConn,cmd]}"
 		conEcho=", and executing ${conn[$selConn,cmd]} when connected"
 	fi
@@ -146,17 +198,36 @@ function connect_connectHost () {
 	#$conCmd
 
 	echo "Connecting to host ${conn[$selConn,host]} as user ${conn[$selConn,user]} with key file ${conn[$selConn,key]}$conEcho"
-	#echo "$conCmd"
+	_debug "$conCmd"
 
-repeat=true
-while "$repeat" ; do
-	eval $conCmd && repeat=false
-	if $repeat ; then
-		echo "Dirty disconnect from remote host `date`. Attempting reconnect..."
-		sleep 5
+	if [ "$autossh" ] ; then
+		#echo "autossh" ; exit
+		eval $conCmd
+	elif [ ! "$autossh" ] ; then
+		repeat=true
+		while "$repeat" ; do
+			#echo "ssh" ; exit
+			cd "$DIR"
+			eval $conCmd && repeat=false
+			if $repeat ; then
+				echo -n "Dirty disconnect from remote host @ `date`. Attempting reconnect in"
+				loop=5
+				while [ $loop -gt 0 ] ; do
+					arg="-n"
+					if [ $loop -eq 1 ] ; then
+						arg=""
+					fi
+
+					echo -n " $loop" && sleep 0.1
+					echo -n "." &&	sleep 0.1
+					echo -n "." &&	sleep 0.1
+					echo ${arg} "." &&	sleep 0.7
+
+					loop=$((loop-1))
+				done
+			fi
+		done
 	fi
-done
-
 
 #	eval $conCmd
 	exit
@@ -171,13 +242,14 @@ function connect_add_ui () {
 	tmp="/tmp/out.tmp"
 	dialog --backtitle "$errors" --title "Add remote host" \
 	--form "\n$errors" 25 60 16 \
-	"Name:" 1 1 "$hostFile" 1 10 25 30 \
-	"Username:" 2 1 "$hostUser" 2 10 25 30 \
-	"Hostname:" 3 1 "$hostName" 3 10 25 30 \
-	"Port:" 4 1 "$hostPort" 4 10 25 30 \
-	"Keyfile:" 5 1 "$hostKey" 5 10 25 30 \
-	"Term:" 6 1 "$hostTerm" 6 10 25 30 \
-	"Command:" 7 1 "$hostCmd" 7 10 25 30 > $tmp 2>&1 >/dev/tty
+	"Name:"		1 1 "$hostFile"		1 10 40 30 \
+	"Username:" 2 1 "$hostUser"		2 10 40 30 \
+	"Hostname:" 3 1 "$hostName"		3 10 40 30 \
+	"Port:"		4 1 "$hostPort"		4 10 40 30 \
+	"Keyfile:"	5 1 "$hostKey"		5 10 40 30 \
+	"Term:"		6 1 "$hostTerm"		6 10 40 30 \
+	"Command:"	7 1 "$hostCmd"		7 10 40 30 \
+	"SSH Args:"	8 1 "$hostArgs"		8 10 40 60 > $tmp 2>&1 >/dev/tty
 
 	EXIT=$?
 
@@ -190,10 +262,11 @@ function connect_add_ui () {
 	 hostKey="`sed -n 5p $tmp`"
 	hostTerm="`sed -n 6p $tmp`"
 	 hostCmd="`sed -n 7p $tmp`"
+	hostArgs="`sed -n 8p $tmp`"
 
 	rm -rf $tmp
 
-	if ! test $EXIT -eq 0 ; then exit $EXIT ; fi 
+	if ! test $EXIT -eq 0 ; then exit $EXIT ; fi
 }
 
 function connect_add () {
@@ -201,15 +274,15 @@ function connect_add () {
 	while ! connect_add_validate ; do
 		connect_add_ui
 	done
-	
+
 	if $validate ; then
 		connect_add_writeFile
 	fi
-}	
+}
 
 function connect_add_validate () {
 	if $first_run ; then first_run=false ; return 1 ; fi
-	
+
 	connect_add_validate_host
 
 	connect_add_validate_user
@@ -223,15 +296,17 @@ function connect_add_validate () {
 	connect_add_validate_term
 
 	connect_add_validate_cmd
+	
+	connect_add_validate_args
 
-	if ! $validHost || ! $validUser || ! $validName || ! $validPort || ! $validKey || ! $validTerm || ! $validCmd ; then
+	if ! $validHost || ! $validUser || ! $validName || ! $validPort || ! $validKey || ! $validTerm || ! $validCmd || ! $validArgs; then
 		return 1
 	fi
-	
+
 	validate=true
 }
 
-function connect_add_validate_host () {	
+function connect_add_validate_host () {
 	if [[ "$hostFile" == "" ]] ; then
 		validHost=false
 		errors="${errors}Name cannot be blank\n"
@@ -302,6 +377,14 @@ function connect_add_validate_cmd () {
 	fi
 }
 
+function connect_add_validate_args () {
+	if [ "$hostArgs" == "" ] ; then
+		validArgs=true
+	else
+		validArgs=true
+	fi
+}
+
 function connect_add_writeFile () {
 	touch ${hostsDir}/${hostFile}
 
@@ -312,6 +395,7 @@ port=$hostPort
 key=$hostKey
 term=$hostTerm
 cmd=$hostCmd
+args=$hostArgs
 EOM
 
 }
