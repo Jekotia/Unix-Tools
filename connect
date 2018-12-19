@@ -145,7 +145,7 @@ function connect_connectHost () {
 		
 		#-# DEFINE THE TERM, IF CONFIGURED
 		if [[ ${conn[$selConn,term]} != "" ]] ; then
-			conCmd=TERM="${conn[$selConn,term]} "
+			conCmd=TERM="${conn[$selConn,term]} ${conCmd}"
 		fi
 		
 		#-# IF CMD IS SET, ADD -t ARG
@@ -165,8 +165,11 @@ function connect_connectHost () {
 
 	# FOR SFTP
 	elif [[ "$selProto" == "sftp" ]] ; then
-		conCmd="sftp -i"
+		conCmd="sftp"
 
+		#-# Add the key file
+		conCmd="${conCmd} -i ${conn[$selConn,key]}"
+		
 		#-# Support optional additional arguments
 		if [[ "${conn[$selConn,args]}" != "" ]] ; then
 			conCmd="${conCmd} ${conn[$selConn,args]}"
